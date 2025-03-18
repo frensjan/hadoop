@@ -68,7 +68,9 @@ import org.apache.http.HttpResponse;
 import org.apache.http.NameValuePair;
 import org.apache.http.client.HttpClient;
 import org.apache.http.client.config.RequestConfig;
+import org.apache.http.client.methods.HttpEntityEnclosingRequestBase;
 import org.apache.http.client.methods.HttpGet;
+import org.apache.http.client.methods.HttpPost;
 import org.apache.http.client.methods.HttpPut;
 import org.apache.http.client.methods.HttpRequestBase;
 import org.apache.http.client.utils.URLEncodedUtils;
@@ -279,12 +281,23 @@ public class WebAppProxyServlet extends HttpServlet {
                 .setLocalAddress(localAddress)
                 .build());
 
-    HttpRequestBase base = null;
-    if (method.equals(HTTP.GET)) {
-      base = new HttpGet(link);
-    } else if (method.equals(HTTP.PUT)) {
-      base = new HttpPut(link);
+    HttpRequestBase base;
+    switch (method) {
+      case GET:
+        base = new HttpGet(link);
+        break;
+      case PUT:
+        base = new HttpPut(link);
+        break;
+      case POST:
+        base = new HttpPost(link);
+        break;
+      default:
+        resp.setStatus(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
+        return;
+    }
 
+    if (base instanceof HttpEntityEnclosingRequestBase) {
       StringBuilder sb = new StringBuilder();
       BufferedReader reader =
           new BufferedReader(
@@ -292,12 +305,9 @@ public class WebAppProxyServlet extends HttpServlet {
       String line;
       while ((line = reader.readLine()) != null) {
         sb.append(line);
-      }
 
-      ((HttpPut) base).setEntity(new StringEntity(sb.toString()));
-    } else {
-      resp.setStatus(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
-      return;
+        ((HttpEntityEnclosingRequestBase) base).setEntity(new StringEntity(sb.toString()));
+      }
     }
 
     @SuppressWarnings("unchecked")
@@ -379,6 +389,12 @@ public class WebAppProxyServlet extends HttpServlet {
   protected final void doPut(final HttpServletRequest req,
       final HttpServletResponse resp) throws ServletException, IOException {
     methodAction(req, resp, HTTP.PUT);
+  }
+
+  @Override
+  protected final void doPost(final HttpServletRequest req,
+      final HttpServletResponse resp) throws ServletException, IOException {
+    methodAction(req, resp, HTTP.POST);
   }
 
   /**

@@ -30,6 +30,9 @@ import java.net.HttpURLConnection;
 import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.net.URL;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.Enumeration;
@@ -42,6 +45,14 @@ import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
+import org.apache.hadoop.io.IOUtils;
+import org.apache.http.HttpStatus;
+import org.apache.http.client.entity.EntityBuilder;
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClientBuilder;
+import org.apache.http.util.EntityUtils;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
 import org.eclipse.jetty.servlet.ServletContextHandler;
@@ -143,16 +154,9 @@ public class TestWebAppProxyServlet {
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp)
         throws ServletException, IOException {
-      InputStream is = req.getInputStream();
-      OutputStream os = resp.getOutputStream();
-      int c = is.read();
-      while (c > -1) {
-        os.write(c);
-        c = is.read();
-      }
-      is.close();
-      os.close();
-      resp.setStatus(HttpServletResponse.SC_OK);
+      resp.setStatus(HttpServletResponse.SC_ACCEPTED);
+      resp.addHeader("X-Hadoop-Test", "true");
+      IOUtils.copyBytes(req.getInputStream(), resp.getOutputStream(), 4096, true);
     }
   }
 
@@ -288,6 +292,43 @@ public class TestWebAppProxyServlet {
           + "/foo/bar/test/tez?a=b&x=y&h=p#main", proxyConn.getURL().toString());
     } finally {
       proxy.close();
+    }
+  }
+
+  @Test
+  @Timeout(5000)
+  void testWebAppProxyServletPost() throws Exception {
+    configuration.set(YarnConfiguration.PROXY_ADDRESS, "localhost:9090");
+    // overriding num of web server threads, see HttpServer.HTTP_MAXTHREADS
+    configuration.setInt("hadoop.http.max.threads", 10);
+    WebAppProxyServerForTest proxy = new WebAppProxyServerForTest();
+    proxy.init(configuration);
+    proxy.start();
+
+    int proxyPort = proxy.proxy.proxyServer.getConnectorAddress(0).getPort();
+
+    CloseableHttpClient client = HttpClientBuilder.create().build();
+
+    try {
+      URL clientUrl = new URL("http://localhost:" + proxyPort
+          + "/proxy/application_00_0");
+
+      String testBody = "test body";
+
+      HttpPost request = new HttpPost(clientUrl.toURI());
+      request.setEntity(EntityBuilder.create().setText(testBody).build());
+
+      CloseableHttpResponse response = client.execute(request);
+      assertEquals(HttpStatus.SC_ACCEPTED, response.getStatusLine().getStatusCode());
+
+      assertTrue(response.containsHeader("X-Hadoop-Test"));
+      assertEquals("true", response.getFirstHeader("X-Hadoop-Test").getValue());
+
+      String responseBody = EntityUtils.toString(response.getEntity());
+      assertEquals(testBody, responseBody);
+    } finally {
+      proxy.close();
+      client.close();
     }
   }
 
